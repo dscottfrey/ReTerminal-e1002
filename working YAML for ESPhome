@@ -1,0 +1,108 @@
+esphome:
+  name: reterminal-e1002
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: fetch_dashboard
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# --- 1. POWER ---
+switch:
+  - platform: gpio
+    pin: GPIO16
+    id: sd_enable_switch
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    pin: GPIO21
+    id: battery_enable_switch
+    restore_mode: ALWAYS_ON
+
+output:
+  - platform: gpio
+    pin: GPIO6
+    id: led_output
+    inverted: true
+
+light:
+  - platform: binary
+    name: "Onboard LED"
+    output: led_output
+    id: onboard_led
+
+# --- 2. PIPELINE ---
+http_request:
+  useragent: esphome/e1002
+  timeout: 120s
+  buffer_size_rx: 2048
+
+online_image:
+  - id: puppet_dashboard
+    url: "http://192.168.8.2:10000/dashboard-rtermianal/0?viewport=800x480&colors=ffffff,000000,ff0000,ffff00,00ff00,0000ff,ffa500"
+    format: png
+    type: RGB565
+    buffer_size: 65536
+    update_interval: never
+    on_download_finished:
+      then:
+        - logger.log: "SUCCESS: Image ready."
+        - light.turn_on: onboard_led
+        - component.update: epaper_display
+        - delay: 2s
+        - light.turn_off: onboard_led
+
+# --- 3. DISPLAY ---
+spi:
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
+
+display:
+  - platform: epaper_spi
+    id: epaper_display
+    model: Seeed-reTerminal-E1002
+    cs_pin: GPIO10
+    dc_pin: GPIO11
+    reset_pin: GPIO12
+    busy_pin:
+      number: GPIO13
+      inverted: true
+    update_interval: never
+    lambda: |-
+      if (id(puppet_dashboard).is_ready()) {
+        it.image(0, 0, id(puppet_dashboard));
+      }
+
+# --- 4. SYSTEM ---
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: "LoC3vuVcRXCtJCmOsh78E8iVbLP+jZYFkXwq5Mw9KVo="
+
+# FIXED FOR 2026.2.4
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.8.3
+    gateway: 192.168.8.1
+    subnet: 255.255.255.0
+
+script:
+  - id: fetch_dashboard
+    then:
+      - wait_until: wifi.connected
+      - delay: 5s
+      - logger.log: "Starting dashboard fetch..."
+      - component.update: puppet_dashboard
