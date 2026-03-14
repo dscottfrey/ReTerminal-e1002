@@ -34,18 +34,6 @@ switch:
     id: battery_enable_switch
     restore_mode: ALWAYS_ON
 
-output:
-  - platform: gpio
-    pin: GPIO6
-    id: led_output
-    inverted: true
-
-light:
-  - platform: binary
-    name: "Onboard LED"
-    output: led_output
-    id: onboard_led
-
 # --- 2. IMAGE PIPELINE ---
 http_request:
   useragent: esphome/e1002
@@ -61,12 +49,7 @@ online_image:
     update_interval: never
     on_download_finished:
       then:
-        - logger.log: "SUCCESS: Image ready."
-        - light.turn_on: onboard_led
         - component.update: epaper_display
-        - delay: 2s
-        - light.turn_off: onboard_led
-        - script.execute: shutdown_sequence
 
 # --- 3. DISPLAY ---
 spi:
@@ -91,8 +74,6 @@ display:
 
 # --- 4. SENSORS ---
 sensor:
-  - platform: uptime
-    name: "Uptime"
   - platform: adc
     pin: GPIO1
     name: "Battery Voltage"
@@ -100,32 +81,38 @@ sensor:
     filters:
       - multiply: 2.0
 
-# --- 5. LOGIC & SLEEP ---
+# --- 5. LOGIC & SLEEP (Simplified) ---
 deep_sleep:
   id: deep_sleep_control
-  # ==========================================================
-  # CHANGE THE REFRESH INTERVAL HERE (e.g., 30min, 1h, 12h)
-  # ==========================================================
-  sleep_duration: 15min 
+  sleep_duration: 15min
+  # run_duration ensures it stays awake for 3 mins after every boot/reboot
+  run_duration: 180s 
   wakeup_pin: GPIO3
   wakeup_pin_mode: INVERT_WAKEUP
 
 script:
   - id: fetch_dashboard
     then:
-      - wait_until: wifi.connected
-      - delay: 5s
-      - logger.log: "Starting dashboard fetch..."
-      - component.update: puppet_dashboard
-
-  - id: shutdown_sequence
-    mode: restart
-    then:
-      - delay: 180s 
-      - logger.log: "Cycle complete. Entering Deep Sleep..."
-      - deep_sleep.enter: deep_sleep_control
+      - logger.log: "Connecting to WiFi..."
+      - wait_until:
+          condition:
+            wifi.connected
+          timeout: 60s
+      - if:
+          condition: wifi.connected
+          then:
+            - logger.log: "WiFi OK -> Fetching dashboard..."
+            - component.update: puppet_dashboard
+          else:
+            - logger.log: "WiFi timeout -> Rebooting..."
+            - button.press: restart_node
 
 # --- 6. SYSTEM ---
+button:
+  - platform: restart
+    id: restart_node
+    name: "Restart Device"
+
 logger:
   level: DEBUG
 api:
@@ -133,6 +120,7 @@ api:
     key: "LoC3vuVcRXCtJCmOsh78E8iVbLP+jZYFkXwq5Mw9KVo="
 ota:
   - platform: esphome
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -140,5 +128,4 @@ wifi:
     static_ip: 192.168.8.3
     gateway: 192.168.8.1
     subnet: 255.255.255.0
-      - logger.log: "Starting dashboard fetch..."
-      - component.update: puppet_dashboard
+  reboot_timeout: 60s
