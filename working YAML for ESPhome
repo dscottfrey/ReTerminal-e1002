@@ -5,6 +5,7 @@ esphome:
       then:
         - switch.turn_on: sd_enable_switch
         - switch.turn_on: battery_enable_switch
+        - light.turn_on: onboard_led
         - delay: 1s
     - priority: -100
       then:
@@ -23,7 +24,7 @@ psram:
   mode: octal
   speed: 80MHz
 
-# --- 1. HARDWARE POWER ---
+# --- 1. HARDWARE POWER & LIGHTS ---
 switch:
   - platform: gpio
     pin: GPIO16
@@ -33,6 +34,26 @@ switch:
     pin: GPIO21
     id: battery_enable_switch
     restore_mode: ALWAYS_ON
+
+light:
+  - platform: status_led
+    pin: GPIO6
+    id: onboard_led
+
+binary_sensor:
+  - platform: gpio
+    pin: GPIO43
+    id: usb_power_sensor
+    name: "USB Power Connected"
+
+sensor:
+  - platform: adc
+    pin: GPIO1
+    name: "Battery Voltage"
+    attenuation: 12db
+    filters:
+      - multiply: 2.0
+    update_interval: 30s
 
 # --- 2. IMAGE PIPELINE ---
 http_request:
@@ -50,6 +71,8 @@ online_image:
     on_download_finished:
       then:
         - component.update: epaper_display
+        # RESTORED: Triggering the sleep check only AFTER the screen is ready
+        - script.execute: shutdown_sequence
 
 # --- 3. DISPLAY ---
 spi:
@@ -72,23 +95,11 @@ display:
         it.image(0, 0, id(puppet_dashboard));
       }
 
-# --- 4. SENSORS ---
-sensor:
-  - platform: adc
-    pin: GPIO1
-    name: "Battery Voltage"
-    attenuation: 12db
-    filters:
-      - multiply: 2.0
-
-# --- 5. LOGIC & SLEEP (Simplified) ---
+# --- 4. LOGIC & SLEEP ---
 deep_sleep:
   id: deep_sleep_control
   sleep_duration: 15min
-  # run_duration ensures it stays awake for 3 mins after every boot/reboot
-  run_duration: 180s 
-  wakeup_pin: GPIO3
-  wakeup_pin_mode: INVERT_WAKEUP
+  # REMOVED run_duration: 180s to prevent it from killing the USB connection mid-flash
 
 script:
   - id: fetch_dashboard
@@ -101,13 +112,25 @@ script:
       - if:
           condition: wifi.connected
           then:
-            - logger.log: "WiFi OK -> Fetching dashboard..."
             - component.update: puppet_dashboard
           else:
-            - logger.log: "WiFi timeout -> Rebooting..."
             - button.press: restart_node
 
-# --- 6. SYSTEM ---
+  - id: shutdown_sequence
+    then:
+      - delay: 30s # Give the E-Ink time to physically finish its refresh
+      - if:
+          condition:
+            binary_sensor.is_off: usb_power_sensor
+          then:
+            - logger.log: "Battery Mode: Sleeping for 15 min."
+            - deep_sleep.enter: deep_sleep_control
+          else:
+            - logger.log: "USB Mode: Staying awake. Refreshing in 15m."
+            - delay: 15min
+            - script.execute: fetch_dashboard
+
+# --- 5. SYSTEM ---
 button:
   - platform: restart
     id: restart_node
