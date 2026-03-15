@@ -53,7 +53,8 @@ sensor:
     attenuation: 12db
     filters:
       - multiply: 2.0
-    update_interval: 30s
+      - heartbeat: 5s  # This forces a send every 5s regardless of change
+    update_interval: 5s
 
 # --- 2. IMAGE PIPELINE ---
 http_request:
